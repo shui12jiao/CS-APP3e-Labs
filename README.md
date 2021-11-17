@@ -5,7 +5,7 @@
 课程：[CMU~213](http://www.cs.cmu.edu/~213/index.html)
 
 ## 任务
-- [ ] Data Lab
+- [X] Data Lab
 - [ ] Bomb Lab
 - [ ] Attack Lab
 - [ ] Buffer Lab(IA32)
