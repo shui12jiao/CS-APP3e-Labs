@@ -162,7 +162,7 @@ int tmin(void) {
  *   Rating: 1
  */
 int isTmax(int x) {
-    return x == (tmin() - 0x1);
+    return !!(x + 0x1) & !(~x ^ (x + 0x1));
 }
 /*
  * allOddBits - return 1 if all odd-numbered bits in word set to 1
@@ -173,7 +173,9 @@ int isTmax(int x) {
  *   Rating: 2
  */
 int allOddBits(int x) {
-    int mask = 0xAAAAAAAA;
+    int mask = 0xAA;
+    mask = mask | (mask << 8);
+    mask = mask | (mask << 16);
     return !((x & mask) ^ mask);
 }
 /*
@@ -198,7 +200,7 @@ int negate(int x) {
  */
 int isAsciiDigit(int x) {
     int sa = ((x + ~0x39) & (0x1 << 31)) >> 31;
-    int sb = ((x + ~0x30) & (0x1 << 31)) >> 31;
+    int sb = ((x + ~0x30 + 0x1) & (0x1 << 31)) >> 31;
     return sa & ~sb & 0x1;
 }
 /*
@@ -209,7 +211,8 @@ int isAsciiDigit(int x) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-    x = ~(!!x) + 1;
+    x = !!x;
+    x = ~x + 1;
     return (x & y) | (~x & z);
 }
 /*
@@ -220,7 +223,11 @@ int conditional(int x, int y, int z) {
  *   Rating: 3
  */
 int isLessOrEqual(int x, int y) {
-    return (((x + ~y) & (0x1 << 31)) >> 31) & 0x1;
+    int high = 0x1 << 31;
+    int sx = ((x & high) >> 31) & 0X1;
+    int sy = ((y & high) >> 31) & 0X1;
+    int dif = sx ^ sy;
+    return (!dif & (((x + ~y) & high) >> 31) & 0x1) | (dif & sx);
 }
 // 4
 /*
@@ -231,8 +238,8 @@ int isLessOrEqual(int x, int y) {
  *   Max ops: 12
  *   Rating: 4
  */
-int logicalNeg(int x) {
-    return (~(x ^ (~x + 0x1)) >> 31) & 0x1;
+int logicalNeg(int x) {  //
+    return (~(x | (~x + 0x1)) >> 31) & 0x1;
 }
 /* howManyBits - return the minimum number of bits required to represent x in
  *             two's complement
@@ -247,20 +254,21 @@ int logicalNeg(int x) {
  *  Rating: 4
  */
 int howManyBits(int x) {
+    int b16, b8, b4, b2, b1, b0;
     int sign = x >> 31;
     x = (~sign & x) | (sign & ~x);
 
-    int b16 = !!(x >> 16) << 4;
+    b16 = !!(x >> 16) << 4;
     x = x >> b16;
-    int b8 = !!(x >> 8) << 3;
+    b8 = !!(x >> 8) << 3;
     x = x >> b8;
-    int b4 = !!(x >> 4) << 2;
+    b4 = !!(x >> 4) << 2;
     x = x >> b4;
-    int b2 = !!(x >> 2) << 1;
+    b2 = !!(x >> 2) << 1;
     x = x >> b2;
-    int b1 = !!(x >> 1);
+    b1 = !!(x >> 1);
     x = x >> b1;
-    int b0 = x;
+    b0 = x;
 
     return b0 + b1 + b2 + b4 + b8 + b16 + 1;
 }
@@ -277,7 +285,21 @@ int howManyBits(int x) {
  *   Rating: 4
  */
 unsigned floatScale2(unsigned uf) {
-    return 2;
+    unsigned exp = uf & 0x7f800000;  // exp: 23-30位
+
+    if (!exp) {                          //非规格化
+        unsigned S = uf & (0x80000000);  //取符号位
+        return (uf << 1) | S;
+    }
+    if (!(exp ^ 0x7f800000)) {  // exp均为1 NaN or Infinity
+        return uf;
+    }
+    exp = exp + 0x00100000;     //指数加1
+    if (!(exp ^ 0x7f800000)) {  // exp均为1 NaN or Infinity
+        return uf;
+    }
+
+    return uf + 0x00800000;
 }
 /*
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
@@ -292,7 +314,42 @@ unsigned floatScale2(unsigned uf) {
  *   Rating: 4
  */
 int floatFloat2Int(unsigned uf) {
-    return 2;
+    unsigned exp = uf & 0x7f800000;  // exp: 23- 30位
+    unsigned S = uf & (0x80000000);  //取符号位
+    uf = uf & (0xFFFFFFFF >> 1);     //去符号位
+
+    if (!(exp ^ 0x7f800000)) {  // exp均为1
+        return 0x80000000;
+    }
+
+    if (!exp) {  //非规格化
+        return 0x0;
+    } else {  //规格化
+        int E = (exp >> 23) - 127, ret;
+        unsigned M = (uf & 0x007fffff) + 0x00800000, V;
+        if (E >= 32) {
+            return 0x80000000;
+        } else if (E <= -32) {
+            return 0x0;
+        }
+        if (E >= 0) {
+            V = (M * (1 << E)) >> 23;
+        } else {
+            V = (M * (1 >> -E)) >> 23;
+        }
+        if (S) {  //负数
+            // if (V > 0x70000000) {
+            //     return 0x80000000;
+            // }
+            ret = -V;
+        } else {  //正数
+            // if (V > 0x7FFFFFFF) {
+            //     return 0x80000000;
+            // }
+            ret = V;
+        }
+        return ret;
+    }
 }
 /*
  * floatPower2 - Return bit-level equivalent of the expression 2.0^x
@@ -307,6 +364,23 @@ int floatFloat2Int(unsigned uf) {
  *   Max ops: 30
  *   Rating: 4
  */
-unsigned floatPower2(int x) {
-    return 2;
+unsigned floatPower2(int x) {  // 2.0 0x40000000
+    unsigned ret = 0x3f800000;
+    int i;
+    if (x >= 128) {
+        return 0x7f800000;
+    } else if (x <= -127) {
+        return 0;
+    }
+
+    if (x >= 0) {
+        for (i = 0; i < x; ++i) {
+            ret += 0x00800000;
+        }
+    } else {
+        for (i = 0; i < -x; ++i) {
+            ret -= 0x00800000;
+        }
+    }
+    return ret;
 }
